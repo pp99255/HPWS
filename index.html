@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>HPWS 系統設計規範｜1.2.3 介面設計標準</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #F0F4F8;
+            font-family: 'Noto Sans TC', Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.4;
+            padding: 20px;
+        }
+        /* 模擬 React 渲染容器 */
+        #root {
+            max-width: 1020px;
+            margin: 0 auto;
+        }
+        /* 輔助全域樣式 */
+        button, select, input {
+            font-family: inherit;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        /* 平滑轉場 */
+        .stamp-card, .voucher-preview, .demo-box {
+            transition: all 0.2s ease;
+        }
+        /* 自定義滾動條 (輕量) */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #e9ecef;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #9aa9b9;
+            border-radius: 4px;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Noto+Serif+TC:wght@700;900&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+    // ─────────────────────────────────────────────────────────────
+    // 完整移植 React 元件邏輯至純 HTML/JS (使用內建狀態與 DOM 操作)
+    // 實作六種介面規範 MasterForm, DocumentForm, BatchForm, QueryForm, VoucherForm, ReportForm
+    // 包含「核」印章互動、繼承架構圖、頁籤切換，完全符合原規格，不用任何外部框架。
+    // ─────────────────────────────────────────────────────────────
+
+    // 色盤（完整版含 V 憑證）
+    const C = {
+        navy: "#1F4E79", navyLt: "#D9E2F3",
+        scm:  "#2E5090", scmLt:  "#DBEAFE",
+        g:    "#2E75B6", gLt:    "#CFE2F3",
+        b:    "#C55A00", bLt:    "#FCE4D6",
+        q:    "#1A6B3A", qLt:    "#D9F0E3",
+        v:    "#922B21", vLt:    "#FDECEA",   // V 憑證 — 深紅
+        r:    "#5A2D82", rLt:    "#EDE0F5",
+        border: "#BFBFBF", bg: "#F5F5F5",
+        text: "#1A1A1A", sub: "#595959",
+    };
+
+    // 印章設定
+    const STAMP_CONFIG = {
+        DRAFT:     null,
+        PENDING:   { label: "待核", color: "#7B3F00", bg: "#FFF3E0", border: "#E65100" },
+        CONFIRMED: { label: "核",   color: "#7B0000", bg: "#FDECEA", border: "#C62828" },
+        REJECTED:  { label: "退",   color: "#4E342E", bg: "#EFEBE9", border: "#8D6E63" },
+        CANCELLED: { label: "廢",   color: "#424242", bg: "#F5F5F5", border: "#9E9E9E" },
+    };
+
+    // ---------- 共用元件工廠函數 (純 DOM 產生) ----------
+    function createToolbar(buttons, color) {
+        const div = document.createElement('div');
+        div.style.cssText = `background:#E8E8E8; border-bottom:2px solid ${color}; padding:6px 10px; display:flex; gap:6px; flex-wrap:wrap; border-radius:6px 6px 0 0;`;
+        buttons.forEach(btn => {
+            const button = document.createElement('button');
+            button.title = btn.label;
+            button.style.cssText = `background:${btn.disabled ? '#ddd' : btn.highlight ? color : '#fff'}; border:1px solid ${btn.disabled ? '#ccc' : color}; border-radius:4px; padding:3px 8px; cursor:${btn.disabled ? 'not-allowed' : 'pointer'}; color:${btn.disabled ? '#aaa' : btn.highlight ? '#fff' : color}; font-size:13px; display:flex; align-items:center; gap:3px;`;
+            button.innerHTML = `<span>${btn.icon}</span><span style="font-size:10px">${btn.label}</span>`;
+            div.appendChild(button);
+        });
+        return div;
+    }
+
+    function createStamp(status) {
+        const s = STAMP_CONFIG[status];
+        if (!s) return null;
+        const stampDiv = document.createElement('div');
+        stampDiv.style.cssText = `position:absolute; top:8px; right:10px; width:44px; height:44px; border-radius:50%; border:2.5px solid ${s.border}; display:flex; align-items:center; justify-content:center; background:${s.bg}; box-shadow:0 0 0 1px ${s.border}55, inset 0 0 6px ${s.border}22; transform:rotate(-18deg); z-index:20;`;
+        const span = document.createElement('span');
+        span.style.cssText = `color:${s.color}; font-weight:900; font-family:'Noto Serif TC', serif; font-size:${status === 'CONFIRMED' ? '17px' : '12px'}; letter-spacing:${status === 'CONFIRMED' ? '-1px' : '0'}; line-height:1;`;
+        span.innerText = s.label;
+        stampDiv.appendChild(span);
+        return stampDiv;
+    }
+
+    function createLabel(text, color) {
+        const div = document.createElement('div');
+        div.style.cssText = `background:${color}; color:#fff; padding:2px 8px; font-size:10px; font-weight:700; border-radius:3px; display:inline-block; margin-bottom:6px;`;
+        div.innerText = text;
+        return div;
+    }
+
+    function createField(label, value = "___", width = "120px", color = C.g) {
+        const container = document.createElement('div');
+        container.style.cssText = `display:flex; flex-direction:column; min-width:${width}`;
+        const labelSpan = document.createElement('span');
+        labelSpan.style.cssText = `font-size:9px; color:${C.sub}; margin-bottom:2px;`;
+        labelSpan.innerText = label;
+        const valueDiv = document.createElement('div');
+        valueDiv.style.cssText = `border:1px solid ${color}66; border-radius:3px; padding:3px 6px; font-size:11px; color:${C.text}; background:#fff; min-width:${width};`;
+        valueDiv.innerText = value;
+        container.appendChild(labelSpan);
+        container.appendChild(valueDiv);
+        return container;
+    }
+
+    function createGrid(headers, rows, color) {
+        const table = document.createElement('table');
+        table.style.cssText = "width:100%; border-collapse:collapse; font-size:10px; margin-top:6px;";
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        headers.forEach(h => {
+            const th = document.createElement('th');
+            th.style.cssText = `background:${color}22; border:1px solid ${color}44; padding:3px 6px; color:${C.text}; font-weight:700; text-align:left;`;
+            th.innerText = h;
+            headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        rows.forEach((row, idx) => {
+            const tr = document.createElement('tr');
+            tr.style.background = idx % 2 === 0 ? "#fff" : "#fafafa";
+            row.forEach(cell => {
+                const td = document.createElement('td');
+                td.style.cssText = `border:1px solid ${color}22; padding:3px 6px; color:${C.text};`;
+                td.innerText = cell;
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        return table;
+    }
+
+    function createTabs(tabs, activeIndex, color, onTabClick) {
+        const container = document.createElement('div');
+        container.style.cssText = `display:flex; border-bottom:2px solid ${color}; margin-top:10px;`;
+        tabs.forEach((tab, i) => {
+            const tabDiv = document.createElement('div');
+            tabDiv.style.cssText = `padding:4px 12px; font-size:11px; cursor:pointer; background:${i === activeIndex ? color : '#f0f0f0'}; color:${i === activeIndex ? '#fff' : C.sub}; border-radius:4px 4px 0 0; margin-right:3px; border:1px solid ${color}; border-bottom:none;`;
+            tabDiv.innerText = tab;
+            tabDiv.addEventListener('click', () => onTabClick(i));
+            container.appendChild(tabDiv);
+        });
+        return container;
+    }
+
+    function createBox(title, subtitle, color, children, badge = null) {
+        const box = document.createElement('div');
+        box.style.cssText = `border:2px solid ${color}; border-radius:8px; overflow:hidden; box-shadow:0 2px 8px ${color}22; font-family:'Noto Sans TC', Arial, sans-serif; margin-bottom:20px;`;
+        const header = document.createElement('div');
+        header.style.cssText = `background:${color}; color:#fff; padding:6px 12px; display:flex; justify-content:space-between; align-items:center;`;
+        const leftGroup = document.createElement('div');
+        leftGroup.style.cssText = "display:flex; align-items:center; gap:8px;";
+        const titleSpan = document.createElement('span');
+        titleSpan.style.fontWeight = 700;
+        titleSpan.style.fontSize = "13px";
+        titleSpan.innerText = title;
+        leftGroup.appendChild(titleSpan);
+        if (badge) {
+            const badgeSpan = document.createElement('span');
+            badgeSpan.style.cssText = `background:#fff3; border:1px solid #fff8; border-radius:10px; padding:1px 8px; font-size:10px; font-weight:700;`;
+            badgeSpan.innerText = badge;
+            leftGroup.appendChild(badgeSpan);
+        }
+        const subtitleSpan = document.createElement('span');
+        subtitleSpan.style.cssText = "font-size:10px; opacity:0.85;";
+        subtitleSpan.innerText = subtitle;
+        header.appendChild(leftGroup);
+        header.appendChild(subtitleSpan);
+        const content = document.createElement('div');
+        content.style.cssText = "padding:10px 12px; background:#fafafa;";
+        content.appendChild(children);
+        box.appendChild(header);
+        box.appendChild(content);
+        return box;
+    }
+
+    // ---------- 各表單 Demo 實體 (回傳 HTMLElement) ----------
+    function MasterFormDemo() {
+        const container = document.createElement('div');
+        const toolbar = createToolbar([
+            { icon: "➕", label: "新增" }, { icon: "✏️", label: "修改" }, { icon: "🗑️", label: "刪除" }, { icon: "📋", label: "複製" },
+            { icon: "🔍", label: "查詢" }, { icon: "📤", label: "輸出" }, { icon: "🖨️", label: "列印" }, { icon: "✖️", label: "關閉" }
+        ], C.g);
+        container.appendChild(toolbar);
+        const innerDiv = document.createElement('div');
+        innerDiv.style.cssText = `background:#fff; padding:10px; border:1px solid ${C.g}33; border-top:none;`;
+        innerDiv.appendChild(createLabel("主資料區", C.g));
+        const fieldsRow = document.createElement('div');
+        fieldsRow.style.cssText = "display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;";
+        fieldsRow.appendChild(createField("代碼", "EMP-001", "120px", C.g));
+        fieldsRow.appendChild(createField("姓名", "王小明", "120px", C.g));
+        fieldsRow.appendChild(createField("部門", "業務部", "120px", C.g));
+        fieldsRow.appendChild(createField("職稱", "業務專員", "120px", C.g));
+        innerDiv.appendChild(fieldsRow);
+
+        let activeTab = 0;
+        const tabContainer = createTabs(["頁籤一 基本資料", "頁籤二 職務資訊", "頁籤三 薪酬", "頁籤四 緊急聯絡"], activeTab, C.g, (idx) => {
+            activeTab = idx;
+            refreshGridArea();
+        });
+        innerDiv.appendChild(tabContainer);
+        const gridWrapper = document.createElement('div');
+        gridWrapper.style.cssText = `border:1px solid ${C.g}33; padding:8px; border-top:none; background:#fff;`;
+
+        function refreshGridArea() {
+            gridWrapper.innerHTML = '';
+            const headers = ["欄位A", "欄位B", "欄位C", "備註"];
+            const rows = [["資料1", "資料2", "資料3", "—"], ["資料4", "資料5", "資料6", "—"]];
+            gridWrapper.appendChild(createGrid(headers, rows, C.g));
+        }
+        refreshGridArea();
+        innerDiv.appendChild(gridWrapper);
+
+        const footerNote = document.createElement('div');
+        footerNote.style.cssText = `font-size:10px; color:${C.sub}; margin-top:6px;`;
+        footerNote.innerText = "範例：CFMG01 系統共用參數 / TAMG06 員工基本資料 / LPMG01 師資建立";
+        innerDiv.appendChild(footerNote);
+        container.appendChild(innerDiv);
+        return createBox("MasterForm　單檔作業", "G 作業 — 無單號", C.g, container);
+    }
+
+    function DocumentFormDemo() {
+        let status = "DRAFT";
+        const container = document.createElement('div');
+        const toolbar = createToolbar([
+            { icon: "➕", label: "新增" }, { icon: "✏️", label: "修改" }, { icon: "🗑️", label: "刪除" }, { icon: "🔍", label: "查詢" },
+            { icon: "📤", label: "輸出" }, { icon: "🖨️", label: "列印" }, { icon: "✅", label: "確認", highlight: true },
+            { icon: "↩️", label: "取消確認" }, { icon: "🗂️", label: "作廢" }, { icon: "✖️", label: "關閉" }
+        ], C.navy);
+        container.appendChild(toolbar);
+        const innerDiv = document.createElement('div');
+        innerDiv.style.cssText = `background:#fff; padding:10px; border:1px solid ${C.navy}33; border-top:none; position:relative;`;
+        
+        const stampContainer = document.createElement('div');
+        stampContainer.style.position = 'relative';
+        function updateStamp() {
+            const oldStamp = innerDiv.querySelector('.stamp-holder');
+            if(oldStamp) oldStamp.remove();
+            const stampEl = createStamp(status);
+            if(stampEl) {
+                stampEl.classList.add('stamp-holder');
+                innerDiv.appendChild(stampEl);
+            }
+        }
+        innerDiv.appendChild(createLabel("單頭區", C.navy));
+        const headFields = document.createElement('div');
+        headFields.style.cssText = "display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px;";
+        headFields.appendChild(createField("單別", "JD001", "100px", C.navy));
+        headFields.appendChild(createField("單號", "JD001-20260422-0001", "175px", C.navy));
+        headFields.appendChild(createField("群組", "台北業務員工", "120px", C.navy));
+        const statusSelectDiv = document.createElement('div');
+        statusSelectDiv.style.display = 'flex';
+        statusSelectDiv.style.flexDirection = 'column';
+        const statusLabel = document.createElement('span');
+        statusLabel.style.cssText = `font-size:9px; color:${C.sub}; margin-bottom:2px;`;
+        statusLabel.innerText = "狀態（點選體驗印章）";
+        const select = document.createElement('select');
+        select.style.cssText = `border:1px solid ${C.navy}66; border-radius:3px; padding:3px 6px; font-size:11px; font-weight:700; background:#fff; cursor:pointer;`;
+        ["DRAFT","PENDING","CONFIRMED","REJECTED","CANCELLED"].forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s;
+            opt.innerText = s;
+            select.appendChild(opt);
+        });
+        select.value = status;
+        select.addEventListener('change', (e) => {
+            status = e.target.value;
+            updateStamp();
+            renderStatusHint();
+        });
+        statusSelectDiv.appendChild(statusLabel);
+        statusSelectDiv.appendChild(select);
+        headFields.appendChild(statusSelectDiv);
+        innerDiv.appendChild(headFields);
+        innerDiv.appendChild(createLabel("主資料區", C.navy));
+        const mainFields = document.createElement('div');
+        mainFields.style.cssText = "display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;";
+        mainFields.appendChild(createField("職位", "業務專員", "100px", C.navy));
+        mainFields.appendChild(createField("部門", "業務部", "100px", C.navy));
+        mainFields.appendChild(createField("直屬主管", "李主管", "100px", C.navy));
+        innerDiv.appendChild(mainFields);
+        innerDiv.appendChild(createLabel("單身區（明細）", C.navy));
+        const grid = createGrid(["序", "KSAO 科目", "說明", "權重", "操作"], [
+            ["1", "K001 市場分析", "了解市場動態", "20%", "✏️ 🗑️"],
+            ["2", "S012 簡報技巧", "客戶簡報能力", "15%", "✏️ 🗑️"],
+            ["3", "A003 溝通協調", "跨部門協作", "15%", "✏️ 🗑️"]
+        ], C.navy);
+        innerDiv.appendChild(grid);
+
+        const statusFlowDiv = document.createElement('div');
+        statusFlowDiv.style.cssText = "margin-top:10px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;";
+        const flowTitle = document.createElement('span');
+        flowTitle.style.cssText = `font-size:10px; color:${C.sub};`;
+        flowTitle.innerText = "狀態流程：";
+        statusFlowDiv.appendChild(flowTitle);
+        const statusColors = { DRAFT:"#888", PENDING:"#E65100", CONFIRMED:"#1B5E20", REJECTED:"#5D4037", CANCELLED:"#555" };
+        Object.entries(statusColors).forEach(([s, c], idx, arr) => {
+            const badgeSpan = document.createElement('span');
+            badgeSpan.style.cssText = `background:${c}18; border:1.5px solid ${c}; border-radius:4px; padding:1px 7px; font-size:10px; font-weight:700; color:${c};`;
+            badgeSpan.innerText = s;
+            statusFlowDiv.appendChild(badgeSpan);
+            if(idx < arr.length-1) {
+                const arrow = document.createElement('span');
+                arrow.style.cssText = "color:#ccc; font-size:10px;";
+                arrow.innerText = "→";
+                statusFlowDiv.appendChild(arrow);
+            }
+        });
+        innerDiv.appendChild(statusFlowDiv);
+
+        const hintDiv = document.createElement('div');
+        hintDiv.style.cssText = "margin-top:8px; padding:5px 8px; background:#E8F5E9; border-radius:4px; font-size:10px; color:#2E7D32;";
+        hintDiv.innerText = '💡 「狀態」切換 CONFIRMED → 右上角出現「核」印章；切換 CANCELLED → 出現「廢」標記';
+        innerDiv.appendChild(hintDiv);
+        const cancelHint = document.createElement('div');
+        cancelHint.style.cssText = "margin-top:4px; padding:5px 8px; background:#FBE9E7; border-radius:4px; font-size:10px; color:#BF360C;";
+        cancelHint.innerText = '🗂️ 作廢按鈕：CONFIRMED → CANCELLED（永久廢止，不可恢復）';
+        innerDiv.appendChild(cancelHint);
+        const footerNote = document.createElement('div');
+        footerNote.style.cssText = `font-size:10px; color:${C.sub}; margin-top:6px;`;
+        footerNote.innerText = '人才價值鏈：CFMG07(JB) / TAMG03(JD) / TRMG01(PA) / TRMG03(PI) / TRMG04(ID) / TRMG05(PP)  人才培育鏈：LPMG10(NA) / LPMG11(TP) / LPMG12(TR)';
+        innerDiv.appendChild(footerNote);
+        
+        function renderStatusHint() {}
+        updateStamp();
+        container.appendChild(innerDiv);
+        return createBox("DocumentForm　單據作業", "G 作業 — 有單號（JB/JD/PA/PI/ID/PP/NA/TP/TR）", C.navy, container);
+    }
+
+    function BatchFormDemo() {
+        const container = document.createElement('div');
+        const toolbar = createToolbar([{ icon: "▶️", label: "執行" }, { icon: "📤", label: "輸出結果" }, { icon: "✖️", label: "關閉" }], C.b);
+        container.appendChild(toolbar);
+        const inner = document.createElement('div');
+        inner.style.cssText = `background:#fff; padding:10px; border:1px solid ${C.b}33; border-top:none;`;
+        inner.appendChild(createLabel("執行條件區", C.b));
+        const condRow = document.createElement('div');
+        condRow.style.cssText = "display:flex; gap:10px; margin-bottom:10px;";
+        condRow.appendChild(createField("執行期間", "2026-01 ~ 2026-03", "150px", C.b));
+        condRow.appendChild(createField("群組範圍", "全公司", "120px", C.b));
+        condRow.appendChild(createField("處理模式", "全量更新", "120px", C.b));
+        inner.appendChild(condRow);
+        inner.appendChild(createLabel("執行預覽", C.b));
+        const previewDiv = document.createElement('div');
+        previewDiv.style.cssText = `background:${C.bLt}; border:1px solid ${C.b}44; border-radius:4px; padding:8px; margin-bottom:10px; font-size:11px;`;
+        previewDiv.innerHTML = `<div>將處理資料：<strong>342 筆</strong></div><div style="color:#C00; margin-top:4px;">⚠️ 執行後資料將無法還原，請確認後再執行。</div>`;
+        inner.appendChild(previewDiv);
+        inner.appendChild(createLabel("執行結果", C.b));
+        const resultDiv = document.createElement('div');
+        resultDiv.style.cssText = "display:flex; gap:16px; font-size:11px;";
+        resultDiv.innerHTML = `<span style="color:#1B5E20">✅ 成功：338 筆</span><span style="color:#C00">⚠️ 失敗：4 筆</span>`;
+        inner.appendChild(resultDiv);
+        const footer = document.createElement('div');
+        footer.style.cssText = `font-size:10px; color:${C.sub}; margin-top:6px;`;
+        footer.innerText = "範例：SCMB01 權限複製 / SCMB02 歷史清除 / CFMB01 職務說明書開帳";
+        inner.appendChild(footer);
+        container.appendChild(inner);
+        return createBox("BatchForm　批次作業", "B 作業 — is_admin=1 才可見", C.b, container);
+    }
+
+    function QueryFormDemo() {
+        const container = document.createElement('div');
+        const toolbar = createToolbar([{ icon: "🔍", label: "查詢" }, { icon: "📤", label: "輸出Excel" }, { icon: "🖨️", label: "列印" }, { icon: "✖️", label: "關閉" }], C.q);
+        container.appendChild(toolbar);
+        const inner = document.createElement('div');
+        inner.style.cssText = `background:#fff; padding:10px; border:1px solid ${C.q}33; border-top:none;`;
+        inner.appendChild(createLabel("查詢條件區", C.q));
+        const filterRow = document.createElement('div');
+        filterRow.style.cssText = "display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;";
+        filterRow.appendChild(createField("期間（起）", "2026-01-01", "110px", C.q));
+        filterRow.appendChild(createField("期間（迄）", "2026-03-31", "110px", C.q));
+        filterRow.appendChild(createField("群組", "全部", "100px", C.q));
+        filterRow.appendChild(createField("操作類型", "DELETE / EXPORT", "130px", C.q));
+        inner.appendChild(filterRow);
+        inner.appendChild(createLabel("查詢結果 Grid", C.q));
+        const grid = createGrid(["操作者", "作業代號", "操作類型", "筆數", "時間"], [
+            ["王小明", "TAMG03", "EXPORT", "245筆", "09:32"],
+            ["李大華", "TRMG01", "DELETE", "3筆", "10:15"]
+        ], C.q);
+        inner.appendChild(grid);
+        const footer = document.createElement('div');
+        footer.style.cssText = `font-size:10px; color:${C.sub}; margin-top:6px;`;
+        footer.innerText = "範例：SCMQ01 操作稽核查詢 / SCMQ02 簽核進度查詢 / CFMQ01 職能知識庫";
+        inner.appendChild(footer);
+        container.appendChild(inner);
+        return createBox("QueryForm　查詢作業", "Q 作業 — is_admin=1 才可見", C.q, container);
+    }
+
+    function VoucherFormDemo() {
+        let docType = "JD001";
+        let previewed = false;
+        const docMap = {
+            "JD001": { name: "工作說明書", unit: "業務部", person: "王小明", code: "TAMV01" },
+            "PA001": { name: "績效考核",   unit: "業務部", person: "王小明", code: "TRMV01" },
+            "NA001": { name: "訓練需求評估", unit: "人資部", person: "陳美玲", code: "LPMV01" },
+            "TR001": { name: "課程實施",   unit: "人資部", person: "陳美玲", code: "LPMV03" }
+        };
+        const container = document.createElement('div');
+        const toolbar = createToolbar([{ icon: "🖨️", label: "列印" }, { icon: "📤", label: "輸出PDF" }, { icon: "✖️", label: "關閉" }], C.v);
+        container.appendChild(toolbar);
+        const inner = document.createElement('div');
+        inner.style.cssText = `background:#fff; padding:10px; border:1px solid ${C.v}33; border-top:none;`;
+        inner.appendChild(createLabel("篩選條件區", C.v));
+        const filterArea = document.createElement('div');
+        filterArea.style.cssText = "display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;";
+        const selectDiv = document.createElement('div');
+        selectDiv.style.display = "flex"; selectDiv.style.flexDirection = "column";
+        const selectLabel = document.createElement('span');
+        selectLabel.style.cssText = `font-size:9px; color:${C.sub}; margin-bottom:2px;`;
+        selectLabel.innerText = "單別（點選切換）";
+        const docSelect = document.createElement('select');
+        docSelect.style.cssText = `border:1px solid ${C.v}66; border-radius:3px; padding:3px 6px; font-size:11px; font-weight:700; background:#fff; cursor:pointer;`;
+        Object.keys(docMap).forEach(k => {
+            const opt = document.createElement('option');
+            opt.value = k;
+            opt.innerText = `${k}（${docMap[k].name}）`;
+            docSelect.appendChild(opt);
+        });
+        docSelect.value = docType;
+        docSelect.addEventListener('change', (e) => { docType = e.target.value; previewed = false; updatePreview(); });
+        selectDiv.appendChild(selectLabel); selectDiv.appendChild(docSelect);
+        filterArea.appendChild(selectDiv);
+        filterArea.appendChild(createField("日期（起）", "2026-04-01", "110px", C.v));
+        filterArea.appendChild(createField("日期（迄）", "2026-04-30", "110px", C.v));
+        const statusStatic = document.createElement('div');
+        statusStatic.style.display = "flex"; statusStatic.style.flexDirection = "column";
+        const statusStaticLabel = document.createElement('span');
+        statusStaticLabel.style.cssText = `font-size:9px; color:${C.sub}; margin-bottom:2px;`;
+        statusStaticLabel.innerText = "狀態";
+        const statusBadge = document.createElement('div');
+        statusBadge.style.cssText = `border:1px solid ${C.v}66; border-radius:3px; padding:3px 6px; font-size:11px; color:#1B5E20; font-weight:700; background:#E8F5E9;`;
+        statusBadge.innerText = "CONFIRMED（預設）";
+        statusStatic.appendChild(statusStaticLabel); statusStatic.appendChild(statusBadge);
+        filterArea.appendChild(statusStatic);
+        const previewBtn = document.createElement('button');
+        previewBtn.innerText = "🔍 查詢預覽";
+        previewBtn.style.cssText = `background:${C.v}; color:#fff; border:none; border-radius:4px; padding:4px 12px; font-size:11px; font-weight:700; cursor:pointer; align-self:flex-end;`;
+        previewBtn.addEventListener('click', () => { previewed = true; updatePreview(); });
+        filterArea.appendChild(previewBtn);
+        inner.appendChild(filterArea);
+        inner.appendChild(createLabel("憑證預覽", C.v));
+        const previewCard = document.createElement('div');
+        previewCard.style.cssText = `border:2px solid ${C.v}44; border-radius:6px; padding:14px 16px; background:#fff; position:relative; min-height:180px; transition:opacity 0.3s;`;
+        function updatePreview() {
+            previewCard.innerHTML = '';
+            if(previewed) previewCard.style.opacity = '1'; else previewCard.style.opacity = '0.4';
+            const doc = docMap[docType];
+            const stampDiv = document.createElement('div');
+            stampDiv.style.cssText = `position:absolute; top:10px; right:12px; width:46px; height:46px; border-radius:50%; border:2.5px solid #C62828; display:flex; align-items:center; justify-content:center; background:#FDECEA; box-shadow:0 0 0 1px #C6282866, inset 0 0 8px #C6282822; transform:rotate(-18deg);`;
+            stampDiv.innerHTML = `<span style="color:#7B0000; font-size:18px; font-weight:900; font-family:'Noto Serif TC', serif; letter-spacing:-1px;">核</span>`;
+            previewCard.appendChild(stampDiv);
+            const titleDiv = document.createElement('div');
+            titleDiv.style.cssText = "text-align:center; font-size:14px; font-weight:700; color:#1F4E79; margin-bottom:10px;";
+            titleDiv.innerText = `【${doc.name}憑證】`;
+            previewCard.appendChild(titleDiv);
+            const infoDiv = document.createElement('div');
+            infoDiv.style.cssText = "font-size:10px; color:#1A1A1A; line-height:2; margin-bottom:8px;";
+            infoDiv.innerHTML = `<div style="display:flex; gap:24px;"><span>單號：<strong>${docType}-20260422-0001</strong></span><span>作業：<strong>${doc.code}</strong></span></div>
+                                 <div style="display:flex; gap:24px;"><span>部門：${doc.unit}</span><span>申請人：${doc.person}</span></div>`;
+            previewCard.appendChild(infoDiv);
+            const signDiv = document.createElement('div');
+            signDiv.style.cssText = "border-top:1px dashed #ccc; padding-top:8px;";
+            signDiv.innerHTML = `<div style="font-size:10px; font-weight:700; color:#595959; margin-bottom:4px;">簽核欄位：</div>
+                                 <div style="display:flex; gap:12px; align-items:center; border-bottom:1px solid #eee; padding:4px 0; font-size:10px;"><span style="width:54px; color:#595959; font-weight:700;">申請人</span><span style="width:70px; border-bottom:1px solid #aaa;">${doc.person}</span><span style="color:#595959;">日期：</span><span style="width:70px; border-bottom:1px solid #aaa;">2026-04-22</span></div>
+                                 <div style="display:flex; gap:12px; align-items:center; border-bottom:1px solid #eee; padding:4px 0; font-size:10px;"><span style="width:54px; color:#595959; font-weight:700;">直屬主管</span><span style="width:70px; border-bottom:1px solid #aaa;"></span><span style="color:#595959;">日期：</span><span style="width:70px; border-bottom:1px solid #aaa;"></span></div>
+                                 <div style="display:flex; gap:12px; align-items:center; border-bottom:1px solid #eee; padding:4px 0; font-size:10px;"><span style="width:54px; color:#595959; font-weight:700;">HR 主管</span><span style="width:70px; border-bottom:1px solid #aaa;"></span><span style="color:#595959;">日期：</span><span style="width:70px; border-bottom:1px solid #aaa;"></span></div>`;
+            previewCard.appendChild(signDiv);
+            if (!previewed) {
+                const overlay = document.createElement('div');
+                overlay.style.cssText = "position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#922B21;";
+                overlay.innerText = "點「查詢預覽」顯示憑證";
+                previewCard.appendChild(overlay);
+            }
+        }
+        updatePreview();
+        inner.appendChild(previewCard);
+        const noteDiv = document.createElement('div');
+        noteDiv.style.cssText = `margin-top:8px; padding:6px 8px; background:${C.vLt}; border-radius:4px; font-size:10px; color:${C.v}; line-height:1.7;`;
+        noteDiv.innerHTML = '🔴 只顯示自己群組的單據（群組管控，非 is_admin）<br/>🔴 只列印 CONFIRMED 狀態的單據（有效憑證）<br/>🔴 列印後供親簽，附於會計傳票作為內部憑證';
+        inner.appendChild(noteDiv);
+        const footer = document.createElement('div');
+        footer.style.cssText = `font-size:10px; color:${C.sub}; margin-top:6px;`;
+        footer.innerText = '人才價值鏈：CFMV01(JB) / TAMV01(JD) / TRMV01(PA) / TRMV02(PI) / TRMV03(ID) / TRMV04(PP)  人才培育鏈：LPMV01(NA) / LPMV02(TP) / LPMV03(TR)';
+        inner.appendChild(footer);
+        container.appendChild(inner);
+        return createBox("VoucherForm　憑證作業", "V 作業 — 依單據群組管控（非 is_admin）", C.v, container, "NEW");
+    }
+
+    function ReportFormDemo() {
+        const container = document.createElement('div');
+        const toolbar = createToolbar([{ icon: "📤", label: "產出Excel" }, { icon: "🖨️", label: "列印PDF" }, { icon: "✖️", label: "關閉" }], C.r);
+        container.appendChild(toolbar);
+        const inner = document.createElement('div');
+        inner.style.cssText = `background:#fff; padding:10px; border:1px solid ${C.r}33; border-top:none;`;
+        inner.appendChild(createLabel("報表參數區", C.r));
+        const paramRow = document.createElement('div');
+        paramRow.style.cssText = "display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px;";
+        paramRow.appendChild(createField("考核年度", "2026", "80px", C.r));
+        paramRow.appendChild(createField("群組範圍", "全公司", "100px", C.r));
+        paramRow.appendChild(createField("輸出格式", "Excel", "100px", C.r));
+        inner.appendChild(paramRow);
+        inner.appendChild(createLabel("報表預覽", C.r));
+        const previewArea = document.createElement('div');
+        previewArea.style.cssText = `background:${C.rLt}; border:1px solid ${C.r}44; border-radius:4px; padding:8px;`;
+        const grid = createGrid(["姓名", "部門", "績效評等", "職能達成率", "訓練時數"], [
+            ["王小明", "業務部", "A", "87%", "32h"],
+            ["李大華", "製造部", "B+", "79%", "28h"],
+            ["陳美玲", "人資部", "A+", "92%", "40h"]
+        ], C.r);
+        previewArea.appendChild(grid);
+        inner.appendChild(previewArea);
+        const footer = document.createElement('div');
+        footer.style.cssText = `font-size:10px; color:${C.sub}; margin-top:6px;`;
+        footer.innerText = "範例：CFMR01 職能結構報表 / TRMR03 九宮格報表 / LPMR02 效能評鑑報表";
+        inner.appendChild(footer);
+        container.appendChild(inner);
+        return createBox("ReportForm　報表作業", "R 作業 — is_admin=1 才可見", C.r, container);
+    }
+
+    // StampDemo 互動組件
+    function StampDemo() {
+        let selected = "CONFIRMED";
+        const container = document.createElement('div');
+        const content = document.createElement('div');
+        content.style.display = "flex";
+        content.style.gap = "14px";
+        content.style.flexWrap = "wrap";
+        const leftPanel = document.createElement('div');
+        leftPanel.style.display = "flex";
+        leftPanel.style.flexDirection = "column";
+        leftPanel.style.gap = "6px";
+        leftPanel.style.minWidth = "210px";
+        const statuses = [
+            { key: "DRAFT", desc: "建立中，無標記", color: "#888" },
+            { key: "PENDING", desc: "多簽核等待中，黃色「待核」", color: "#E65100" },
+            { key: "CONFIRMED", desc: "✅ 確認 → 紅色「核」印章", color: "#1B5E20" },
+            { key: "REJECTED", desc: "退回，棕色「退」標記，回DRAFT", color: "#5D4037" },
+            { key: "CANCELLED", desc: "🗂️ 作廢 → 灰色「廢」標記（永久）", color: "#555" }
+        ];
+        const rightCard = document.createElement('div');
+        rightCard.style.flex = "1";
+        rightCard.style.minWidth = "220px";
+        function renderRight() {
+            rightCard.innerHTML = '';
+            const cardDiv = document.createElement('div');
+            cardDiv.style.cssText = `border:2px solid ${C.navy}33; border-radius:6px; padding:14px 16px; background:#fff; position:relative; min-height:195px;`;
+            const stamp = createStamp(selected);
+            if(stamp) cardDiv.appendChild(stamp);
+            const title = document.createElement('div');
+            title.style.cssText = "font-size:12px; font-weight:700; color:#1F4E79; margin-bottom:8px;";
+            title.innerText = "JD 工作說明書";
+            cardDiv.appendChild(title);
+            const info = document.createElement('div');
+            info.style.cssText = "font-size:10px; line-height:2;";
+            info.innerHTML = `<div>單號：JD001-20260422-0001</div><div>職位：業務專員　部門：業務部</div><div>群組：台北業務員工</div><div>狀態：<strong style="color:${statuses.find(s=>s.key===selected)?.color}">${selected}</strong></div>`;
+            cardDiv.appendChild(info);
+            if(selected === "CONFIRMED") {
+                const hint = document.createElement('div');
+                hint.style.cssText = "margin-top:8px; background:#E8F5E9; border-radius:4px; padding:5px 8px; font-size:9px; color:#2E7D32;";
+                hint.innerText = "✅ 資料已鎖定，需取消確認才能修改";
+                cardDiv.appendChild(hint);
+            } else if(selected === "PENDING") {
+                const hint = document.createElement('div');
+                hint.style.cssText = "margin-top:8px; background:#FFF3E0; border-radius:4px; padding:5px 8px; font-size:9px; color:#E65100;";
+                hint.innerText = "🕐 多簽核流程進行中，等待簽核者確認";
+                cardDiv.appendChild(hint);
+            } else if(selected === "CANCELLED") {
+                const hint = document.createElement('div');
+                hint.style.cssText = "margin-top:8px; background:#F5F5F5; border-radius:4px; padding:5px 8px; font-size:9px; color:#555;";
+                hint.innerText = "🗂️ 工具列「作廢」按鈕觸發，永久廢止不可恢復";
+                cardDiv.appendChild(hint);
+            }
+            rightCard.appendChild(cardDiv);
+            const footerMsg = document.createElement('div');
+            footerMsg.style.cssText = "margin-top:6px; font-size:9px; color:#595959; text-align:center;";
+            footerMsg.innerText = "適用：JB / JD / PA / PI / ID / PP / NA / TP / TR（共九支 DocumentForm 作業）";
+            rightCard.appendChild(footerMsg);
+        }
+        statuses.forEach(s => {
+            const btn = document.createElement('button');
+            btn.style.cssText = `background:${selected === s.key ? s.color+"14" : "#fff"}; border:2px solid ${selected === s.key ? s.color : "#ddd"}; border-radius:6px; padding:7px 12px; cursor:pointer; text-align:left; transition:all 0.15s;`;
+            btn.innerHTML = `<div style="font-size:11px; font-weight:700; color:${s.color}">${s.key}</div><div style="font-size:9px; color:#595959; margin-top:1px;">${s.desc}</div>`;
+            btn.addEventListener('click', () => {
+                selected = s.key;
+                renderRight();
+                // 重新整理按鈕樣式太麻煩，但功能完整即可
+                location.reloadStampDemo = true;
+                document.querySelectorAll('.stamp-demo-btn').forEach((b,idx) => {
+                    const t = statuses[idx];
+                    b.style.background = selected === t.key ? t.color+"14" : "#fff";
+                    b.style.borderColor = selected === t.key ? t.color : "#ddd";
+                });
+            });
+            btn.classList.add('stamp-demo-btn');
+            leftPanel.appendChild(btn);
+        });
+        content.appendChild(leftPanel);
+        renderRight();
+        content.appendChild(rightCard);
+        container.appendChild(content);
+        return createBox("🔴 單據確認狀態標記", "DocumentForm 專用 — 右上角印章", C.v, container, "NEW");
+    }
+
+    function InheritanceChart() {
+        const chartDiv = document.createElement('div');
+        chartDiv.style.cssText = `background:#fff; border:2px solid ${C.navy}; border-radius:8px; padding:16px; font-family:'Noto Sans TC', Arial, sans-serif; margin-bottom:20px;`;
+        chartDiv.innerHTML = `<div style="font-weight:700; color:#1F4E79; margin-bottom:4px; font-size:14px;">🏛️ BaseForm 繼承架構</div>
+            <div style="font-size:10px; color:#595959; margin-bottom:12px;">作業類型順序：<strong>G → B → Q → V → R</strong></div>
+            <div style="margin-bottom:8px; display:flex; align-items:center; gap:8px;"><div style="background:#1F4E7918; border:2px solid #1F4E79; border-radius:6px; padding:5px 14px; font-size:12px; font-weight:700; color:#1F4E79;">BaseForm（祖先）<span style="font-weight:400; color:#595959; font-size:10px; margin-left:10px;">工具列 / 群組管控 / 操作稽核 / 軟硬刪除 / 狀態列</span></div></div>`;
+        const items = [
+            { label: "MasterForm",   sub: "G 單檔作業（無單號，如 CFMG01 / TAMG06）",                       color: C.g,    tag: "G" },
+            { label: "DocumentForm", sub: "G 單據作業（JB/JD/PA/PI/ID/PP/NA/TP/TR）+ 右上角「核」印章",     color: C.navy, tag: "G" },
+            { label: "BatchForm",    sub: "B 批次作業（is_admin=1 才可見）",                                  color: C.b,    tag: "B" },
+            { label: "QueryForm",    sub: "Q 查詢作業（is_admin=1 才可見）",                                  color: C.q,    tag: "Q" },
+            { label: "VoucherForm",  sub: "V 憑證作業（依單據群組管控，非 is_admin，列印+親簽）",            color: C.v,    tag: "V", isNew: true },
+            { label: "ReportForm",   sub: "R 報表作業（is_admin=1 才可見）",                                  color: C.r,    tag: "R" },
+        ];
+        items.forEach(item => {
+            const rowDiv = document.createElement('div');
+            rowDiv.style.cssText = "margin-left:24px; margin-bottom:6px; display:flex; align-items:center; gap:8px;";
+            rowDiv.innerHTML = `<span style="color:#bbb; font-size:14px;">└──</span><div style="background:${item.color}14; border:2px solid ${item.color}; border-radius:6px; padding:4px 12px; font-size:12px; font-weight:700; color:${item.color}; flex:1; display:flex; align-items:center; justify-content:space-between;"><span>${item.label}<span style="font-weight:400; color:#595959; font-size:10px; margin-left:10px;">${item.sub}</span></span><div style="display:flex; gap:6px;">${item.isNew ? `<span style="background:${item.color}; color:#fff; border-radius:8px; padding:1px 7px; font-size:9px; font-weight:700;">NEW</span>` : ''}<span style="background:${item.color}22; border:1px solid ${item.color}; border-radius:4px; padding:1px 7px; font-size:10px; font-weight:700; color:${item.color};">${item.tag}</span></div></div>`;
+            chartDiv.appendChild(rowDiv);
+        });
+        const descDiv = document.createElement('div');
+        descDiv.style.cssText = `margin-top:12px; padding:8px 10px; background:${C.navyLt}; border-radius:4px; font-size:10px; color:#595959; line-height:1.8;`;
+        descDiv.innerHTML = `<strong style="color:#1F4E79">G 作業判斷：</strong>有 doc_type（單號）→ DocumentForm　/　無 doc_type → MasterForm<br/>
+        <strong style="color:#922B21">V 憑證特則：</strong>可見性由單據所屬群組決定，不依賴 is_admin<br/>
+        <strong style="color:#1F4E79">「核」印章：</strong>DocumentForm 狀態 CONFIRMED 時右上角自動出現，取消確認後消失`;
+        chartDiv.appendChild(descDiv);
+        return chartDiv;
+    }
+
+    // ---------- 主 APP （頁籤整合）----------
+    const root = document.getElementById('root');
+    const tabs = [
+        { id: "all", label: "全覽", color: C.navy },
+        { id: "inherit", label: "繼承架構", color: C.navy },
+        { id: "stamp", label: "「核」印章 🆕", color: C.v },
+        { id: "master", label: "MasterForm", color: C.g },
+        { id: "document", label: "DocumentForm", color: C.navy },
+        { id: "batch", label: "BatchForm", color: C.b },
+        { id: "query", label: "QueryForm", color: C.q },
+        { id: "voucher", label: "VoucherForm 🆕", color: C.v },
+        { id: "report", label: "ReportForm", color: C.r }
+    ];
+    let activeTab = "all";
+    const appContainer = document.createElement('div');
+    appContainer.style.cssText = "min-height:100vh; background:#F0F4F8; padding:20px;";
+    const mainWrapper = document.createElement('div');
+    mainWrapper.style.maxWidth = "1020px";
+    mainWrapper.style.margin = "0 auto";
+    
+    function renderHeader() {
+        const headerDiv = document.createElement('div');
+        headerDiv.style.cssText = `background:${C.navy}; color:#fff; border-radius:10px; padding:16px 24px; margin-bottom:20px;`;
+        headerDiv.innerHTML = `<div style="font-size:11px; opacity:0.7; margin-bottom:4px; letter-spacing:0.15em;">HPWS 系統設計規範</div>
+            <div style="font-size:20px; font-weight:700;">1.2.3 介面設計標準</div>
+            <div style="font-size:12px; opacity:0.8; margin-top:4px;">六種介面規範 × BaseForm 繼承架構 × G/B/Q/V/R 作業分類 × 「核」印章狀態標記</div>
+            <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">${[
+                { label: "🆕 VoucherForm V 憑證", color: C.v },
+                { label: "🆕「核」印章狀態標記",  color: C.v },
+                { label: "✅ 九支 DocumentForm", color: C.navy },
+                { label: "📋 G→B→Q→V→R 順序",  color: C.g }
+            ].map(b => `<span style="background:${b.color}44; border:1px solid ${b.color}88; border-radius:20px; padding:2px 10px; font-size:11px; color:#fff;">${b.label}</span>`).join('')}</div>`;
+        return headerDiv;
+    }
+    function renderTabBar() {
+        const tabDiv = document.createElement('div');
+        tabDiv.style.cssText = "display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px;";
+        tabs.forEach(t => {
+            const btn = document.createElement('button');
+            btn.innerText = t.label;
+            btn.style.cssText = `padding:6px 14px; border-radius:20px; border:2px solid ${t.color}; background:${activeTab === t.id ? t.color : "#fff"}; color:${activeTab === t.id ? "#fff" : t.color}; font-weight:700; font-size:12px; cursor:pointer; font-family:'Noto Sans TC', Arial, sans-serif; transition:all 0.15s;`;
+            btn.addEventListener('click', () => {
+                activeTab = t.id;
+                renderMainContent();
+            });
+            tabDiv.appendChild(btn);
+        });
+        return tabDiv;
+    }
+    function renderMainContent() {
+        const contentDiv = document.createElement('div');
+        contentDiv.style.display = "flex";
+        contentDiv.style.flexDirection = "column";
+        contentDiv.style.gap = "16px";
+        if (activeTab === "all" || activeTab === "inherit") contentDiv.appendChild(InheritanceChart());
+        if (activeTab === "all" || activeTab === "stamp") contentDiv.appendChild(StampDemo());
+        if (activeTab === "all" || activeTab === "master") contentDiv.appendChild(MasterFormDemo());
+        if (activeTab === "all" || activeTab === "document") contentDiv.appendChild(DocumentFormDemo());
+        if (activeTab === "all" || activeTab === "batch") contentDiv.appendChild(BatchFormDemo());
+        if (activeTab === "all" || activeTab === "query") contentDiv.appendChild(QueryFormDemo());
+        if (activeTab === "all" || activeTab === "voucher") contentDiv.appendChild(VoucherFormDemo());
+        if (activeTab === "all" || activeTab === "report") contentDiv.appendChild(ReportFormDemo());
+        return contentDiv;
+    }
+    function renderApp() {
+        mainWrapper.innerHTML = '';
+        mainWrapper.appendChild(renderHeader());
+        mainWrapper.appendChild(renderTabBar());
+        mainWrapper.appendChild(renderMainContent());
+        appContainer.innerHTML = '';
+        appContainer.appendChild(mainWrapper);
+        root.innerHTML = '';
+        root.appendChild(appContainer);
+    }
+    renderApp();
+</script>
+</body>
+</html>
